@@ -1,91 +1,33 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-
 mod handshake;
 mod peer;
+mod server;
 mod store;
 
-use futures_util::StreamExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpListener;
 use tracing::info;
 
-use crate::peer::Peer;
-use crate::store::Store;
+use crate::server::Server;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize tracing
     tracing_subscriber::fmt::init();
 
-    // Create the peer store
-    let store = Arc::new(Store::new());
+    // Create the server
+    let server = Server::new();
 
     let try_socket = TcpListener::bind("127.0.0.1:9000").await;
     let listener = try_socket.expect("Failed to bind");
     info!("Listening on: {}", listener.local_addr().unwrap());
 
     while let Ok((stream, addr)) = listener.accept().await {
-        let store_clone = Arc::clone(&store);
-        tokio::spawn(handle_connection(stream, addr, store_clone));
+        let server_clone = server.clone();
+        tokio::spawn(async move {
+            if let Err(e) = server_clone.handle_connection(stream, addr).await {
+                info!("Error handling connection: {}", e);
+            }
+        });
     }
 
-    Ok(())
-}
-
-async fn handle_connection(
-    raw_stream: TcpStream,
-    addr: SocketAddr,
-    store: Arc<Store>, // Using underscore prefix to indicate it's unused
-) -> anyhow::Result<()> {
-    info!("Incoming TCP connection from: {}", addr);
-
-    let ws_stream = tokio_tungstenite::accept_async(raw_stream)
-        .await
-        .expect("Error during the websocket handshake occurred");
-    info!("WebSocket connection established: {}", addr);
-
-    let (outgoing, mut incoming) = ws_stream.split();
-
-    // ------ do handshake
-    let (raw_peer_id, peer_id) = handshake::handshake(&mut incoming).await?;
-    info!("Handshake successful for peer: {}", peer_id);
-
-    // Create a new peer
-    let peer = Arc::new(Peer::new(
-        raw_peer_id,
-        peer_id.clone(),
-        incoming,
-        outgoing,
-        store.clone(),
-    ));
-
-    // Add the peer to the store
-    store.add_peer(peer.clone());
-    info!("Peer {} added to store", peer_id);
-
-    // Wait for the peer to disconnect or for an error
-    // TODO: Implement peer.work() to handle messages
-
-    /*
-    go func() {
-        peer.Work()
-        r.store.DeletePeer(peer)
-        peer.log.Debugf("relay connection closed")
-        r.metrics.PeerDisconnected(peer.String())
-    }()
-
-    if err := h.handshakeResponse(); err != nil {
-        log.Errorf("failed to send handshake response, close peer: %s", err)
-        peer.Close()
-    }
-    */
-
-    // For now, just sleep for a bit to keep the connection alive
-    tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-
-    // Clean up by removing peer from store
-    // store.delete_peer(&peer);
-    // info!("Peer {} removed from store", peer_id);
-    // info!("{} disconnected", &addr);
     Ok(())
 }
