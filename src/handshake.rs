@@ -38,6 +38,7 @@ impl From<tokio_tungstenite::tungstenite::Error> for HandshakeError {
 }
 
 #[derive(PartialEq, Debug)]
+#[allow(dead_code)]
 pub enum MessageType {
     Unknown = 0,
     // Deprecated: Use MsgTypeAuth instead.
@@ -53,7 +54,7 @@ pub enum MessageType {
 
 /// Reads the handshake data from the incoming WebSocket stream
 pub async fn handshake<S>(
-    mut incoming: SplitStream<WebSocketStream<S>>,
+    incoming: &mut SplitStream<WebSocketStream<S>>,
 ) -> Result<(Vec<u8>, String), HandshakeError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -135,7 +136,7 @@ pub fn handle_auth_message(data: &[u8]) -> Result<(Vec<u8>, String), HandshakeEr
     // Handle the authentication message here
     // For now, just print the data
     info!("Handling auth message: {:?}", data);
-    let (raw_peer_id, auth_payload) = unmarshal_auth_msg(data)?;
+    let (raw_peer_id, _auth_payload) = unmarshal_auth_msg(data)?;
 
     // TODO : validate auth_payload
     let peer_id = hash_id_to_string(&raw_peer_id);
