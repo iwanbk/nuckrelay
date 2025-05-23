@@ -1,7 +1,10 @@
 use futures_util::stream::{SplitSink, SplitStream};
+use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
+
+use crate::store::Store;
 
 /// Represents a peer connected to the relay server
 #[allow(dead_code)]
@@ -17,6 +20,9 @@ pub struct Peer {
 
     /// The outgoing part of the WebSocket stream
     outgoing: SplitSink<WebSocketStream<TcpStream>, Message>,
+
+    /// Reference to the store that manages peers
+    store: Arc<Store>,
 }
 
 impl Peer {
@@ -26,12 +32,14 @@ impl Peer {
         peer_id: String,
         incoming: SplitStream<WebSocketStream<TcpStream>>,
         outgoing: SplitSink<WebSocketStream<TcpStream>, Message>,
+        store: Arc<Store>,
     ) -> Self {
         Peer {
             raw_peer_id,
             peer_id,
             incoming,
             outgoing,
+            store,
         }
     }
 

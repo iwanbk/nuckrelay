@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
 async fn handle_connection(
     raw_stream: TcpStream,
     addr: SocketAddr,
-    _store: Arc<Store>, // Using underscore prefix to indicate it's unused
+    store: Arc<Store>, // Using underscore prefix to indicate it's unused
 ) -> anyhow::Result<()> {
     info!("Incoming TCP connection from: {}", addr);
 
@@ -51,10 +51,17 @@ async fn handle_connection(
     info!("Handshake successful for peer: {}", peer_id);
 
     // Create a new peer
-    let _peer = Peer::new(raw_peer_id, peer_id.clone(), incoming, outgoing);
+    let peer = Arc::new(Peer::new(
+        raw_peer_id,
+        peer_id.clone(),
+        incoming,
+        outgoing,
+        store.clone(),
+    ));
 
-    // We're not adding the peer to the store for now
-    info!("Peer {} created", peer_id);
+    // Add the peer to the store
+    store.add_peer(peer.clone());
+    info!("Peer {} added to store", peer_id);
 
     // Wait for the peer to disconnect or for an error
     // TODO: Implement peer.work() to handle messages
@@ -76,8 +83,9 @@ async fn handle_connection(
     // For now, just sleep for a bit to keep the connection alive
     tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
-    // No need to call store.delete_peer since we're not adding it to store
-    info!("Peer {} disconnected", peer_id);
-    info!("{} disconnected", &addr);
+    // Clean up by removing peer from store
+    // store.delete_peer(&peer);
+    // info!("Peer {} removed from store", peer_id);
+    // info!("{} disconnected", &addr);
     Ok(())
 }
