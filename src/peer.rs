@@ -1,3 +1,5 @@
+use std::fmt;
+
 use futures_util::stream::{SplitSink, SplitStream};
 use std::sync::Arc;
 use tokio::net::TcpStream;
@@ -50,8 +52,8 @@ impl Peer {
     }
 }
 
-impl ToString for Peer {
-    fn to_string(&self) -> String {
-        self.peer_id.clone()
+impl fmt::Display for Peer {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.peer_id)
     }
 }
