@@ -1,4 +1,5 @@
 mod handshake;
+mod message;
 mod peer;
 mod server;
 mod store;
