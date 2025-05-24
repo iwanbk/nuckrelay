@@ -1,11 +1,14 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
+use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
 use tokio::net::TcpStream;
 use tracing::info;
+use url::Url;
 
 use crate::handshake;
+use crate::message::marshal_auth_response;
 use crate::peer::Peer;
 use crate::store::Store;
 
@@ -14,13 +17,20 @@ use crate::store::Store;
 pub struct Server {
     /// Store that manages all peer connections
     store: Arc<Store>,
+
+    prepared_auth_response: Vec<u8>,
 }
 
 impl Server {
     /// Create a new Server instance
-    pub fn new() -> Self {
+    pub fn new(exposed_address: String, tls_supported: bool) -> Result<Self> {
         let store = Arc::new(Store::new());
-        Server { store }
+        let instance_url = get_instance_url(&exposed_address, tls_supported)?;
+        let prepared_auth_response = marshal_auth_response(&instance_url)?;
+        Ok(Server {
+            store,
+            prepared_auth_response,
+        })
     }
 
     /// Handle a new connection from a client
@@ -36,10 +46,14 @@ impl Server {
             .expect("Error during the websocket handshake occurred");
         info!("WebSocket connection established: {}", addr);
 
-        let (outgoing, mut incoming) = ws_stream.split();
+        let (mut outgoing, mut incoming) = ws_stream.split();
 
-        // ------ do handshake
-        let (raw_peer_id, peer_id) = handshake::handshake(&mut incoming).await?;
+        let (raw_peer_id, peer_id) = handshake::handshake(
+            &mut outgoing,
+            &mut incoming,
+            self.prepared_auth_response.clone(),
+        )
+        .await?;
         info!("Handshake successful for peer: {}", peer_id);
 
         // Create a new peer
@@ -81,4 +95,41 @@ impl Server {
         info!("{} disconnected", &addr);
         Ok(())
     }
+}
+
+/// Checks if user supplied a URL scheme otherwise adds to the
+/// provided address according to TLS definition and parses the address before returning it
+///
+/// # Arguments
+/// * `exposed_address` - A string representing the address that the relay server is exposed on
+/// * `tls_supported` - A boolean indicating whether the relay server supports TLS
+///
+/// # Returns
+/// * `Result<String>` - The parsed URL as a string or an error
+fn get_instance_url(exposed_address: &str, tls_supported: bool) -> Result<String> {
+    let addr = if exposed_address.contains("://") {
+        // Address already has a scheme
+        let parts: Vec<&str> = exposed_address.split("://").collect();
+        if parts.len() > 2 {
+            return Err(anyhow!("invalid exposed address: {}", exposed_address));
+        }
+        exposed_address.to_string()
+    } else {
+        // Add scheme based on TLS support
+        if tls_supported {
+            format!("rels://{}", exposed_address)
+        } else {
+            format!("rel://{}", exposed_address)
+        }
+    };
+
+    // Parse the URL to validate it
+    let parsed_url = Url::parse(&addr).map_err(|e| anyhow!("invalid exposed address: {}", e))?;
+
+    // Validate the scheme
+    if parsed_url.scheme() != "rel" && parsed_url.scheme() != "rels" {
+        return Err(anyhow!("invalid scheme: {}", parsed_url.scheme()));
+    }
+
+    Ok(parsed_url.to_string())
 }
