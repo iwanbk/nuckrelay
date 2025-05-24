@@ -1,0 +1,111 @@
+use std::{error::Error, fmt};
+
+use anyhow::Result;
+use base64::prelude::*;
+use tracing::error;
+
+#[derive(Debug)]
+pub enum MessageError {
+    InvalidMsgLength,
+    InvalidMsgType,
+}
+
+impl fmt::Display for MessageError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MessageError::InvalidMsgLength => write!(f, "Invalid message length"),
+            MessageError::InvalidMsgType => write!(f, "Invalid message type"),
+        }
+    }
+}
+
+impl Error for MessageError {}
+
+#[derive(PartialEq, Debug)]
+#[allow(dead_code)]
+pub enum MessageType {
+    Unknown = 0,
+    // Deprecated: Use MsgTypeAuth instead.
+    Hello = 1,
+    // Deprecated: Use MsgTypeAuthResponse instead.
+    HelloResponse = 2,
+    Transport = 3,
+    Close = 4,
+    HealthCheck = 5,
+    Auth = 6,
+    AuthResponse = 7,
+}
+
+pub const MAX_HANDSHAKE_SIZE: usize = 212;
+pub const SIZE_OF_VERSION_BYTE: usize = 1;
+pub const SIZE_OF_MSG_TYPE: usize = 1;
+pub const PROTO_HEADER_SIZE: usize = SIZE_OF_VERSION_BYTE + SIZE_OF_MSG_TYPE;
+pub const CURRENT_PROTO_VERSION: i64 = 1;
+
+// Constants needed for unmarshal_auth_msg
+const SIZE_OF_MAGIC_BYTE: usize = 4;
+const MAGIC_HEADER: [u8; 4] = [0x21, 0x12, 0xA4, 0x42];
+const HEADER_TOTAL_SIZE_AUTH: usize = PROTO_HEADER_SIZE + SIZE_OF_MAGIC_BYTE + 36; // 36 is ID_SIZE from Go code
+const OFFSET_MAGIC_BYTE: usize = PROTO_HEADER_SIZE;
+const OFFSET_AUTH_PEER_ID: usize = PROTO_HEADER_SIZE + SIZE_OF_MAGIC_BYTE;
+
+pub fn determine_client_message_type(data: &[u8]) -> Result<MessageType, MessageError> {
+    if data.len() < PROTO_HEADER_SIZE {
+        return Err(MessageError::InvalidMsgLength);
+    }
+
+    let msg_type = data[1];
+
+    match msg_type {
+        1 => Ok(MessageType::Hello),
+        3 => Ok(MessageType::Transport),
+        4 => Ok(MessageType::Close),
+        5 => Ok(MessageType::HealthCheck),
+        6 => Ok(MessageType::Auth),
+        _ => Err(MessageError::InvalidMsgType),
+    }
+}
+
+/// Extracts peerID and the auth payload from the message
+///
+/// This is a Rust implementation of the Go function in:
+/// https://github.com/netbirdio/netbird/blob/2a89d6e47a4c144dd1e1162f3e5d3cb73525ae77/relay/messages/message.go#L219-L228
+pub fn unmarshal_auth_msg(msg: &[u8]) -> Result<(Vec<u8>, Vec<u8>), MessageError> {
+    if msg.len() < HEADER_TOTAL_SIZE_AUTH {
+        error!("Invalid message length: {}", msg.len());
+        return Err(MessageError::InvalidMsgLength);
+    }
+
+    // Check magic header
+    if msg[OFFSET_MAGIC_BYTE..OFFSET_MAGIC_BYTE + SIZE_OF_MAGIC_BYTE] != MAGIC_HEADER {
+        error!("Invalid magic header");
+        return Err(MessageError::InvalidMsgType);
+    }
+
+    // Extract peer ID and auth payload
+    let peer_id = msg[OFFSET_AUTH_PEER_ID..HEADER_TOTAL_SIZE_AUTH].to_vec();
+    let auth_payload = msg[HEADER_TOTAL_SIZE_AUTH..].to_vec();
+
+    Ok((peer_id, auth_payload))
+}
+
+/// Converts a hash ID to a human-readable string
+///
+/// This is a Rust implementation of the Go function:
+/// https://github.com/netbirdio/netbird/blob/main/relay/messages/id.go#L29-L31
+pub fn hash_id_to_string(id_hash: &[u8]) -> String {
+    const PREFIX_LENGTH: usize = 4;
+
+    if id_hash.len() <= PREFIX_LENGTH {
+        return String::from_utf8_lossy(id_hash).to_string();
+    }
+
+    // Take the first PREFIX_LENGTH bytes as is (typically "sha-")
+    let prefix = String::from_utf8_lossy(&id_hash[..PREFIX_LENGTH]);
+
+    // Base64 encode the rest of the bytes
+    let encoded = BASE64_STANDARD.encode(&id_hash[PREFIX_LENGTH..]);
+
+    // Combine prefix and encoded data
+    format!("{}{}", prefix, encoded)
+}
