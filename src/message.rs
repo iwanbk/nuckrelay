@@ -37,10 +37,40 @@ pub enum MessageType {
 }
 
 pub const MAX_HANDSHAKE_SIZE: usize = 212;
+pub const MAX_HANDSHAKE_RESP_SIZE: usize = 8192;
 pub const SIZE_OF_VERSION_BYTE: usize = 1;
 pub const SIZE_OF_MSG_TYPE: usize = 1;
 pub const PROTO_HEADER_SIZE: usize = SIZE_OF_VERSION_BYTE + SIZE_OF_MSG_TYPE;
 pub const CURRENT_PROTO_VERSION: i64 = 1;
+
+/// Creates a response message to the auth.
+///
+/// In case of successful connection, the server responds with an AuthResponse message.
+/// This message contains the server's instance URL. This URL will be used to choose
+/// the common Relay server in case the peers are in different Relay servers.
+///
+/// This is a Rust implementation of the Go function:
+/// https://github.com/netbirdio/netbird/blob/5bed6777d568f1e0e96a4c3dbd290e175502eb81/relay/messages/message.go#L234-L248
+pub fn marshal_auth_response(address: &str) -> Result<Vec<u8>, MessageError> {
+    let address_bytes = address.as_bytes();
+
+    // Pre-allocate with capacity for the header plus the address
+    let mut msg = Vec::with_capacity(PROTO_HEADER_SIZE + address_bytes.len());
+
+    // Set protocol version and message type
+    msg.push(CURRENT_PROTO_VERSION as u8);
+    msg.push(MessageType::AuthResponse as u8);
+
+    // Append the address bytes
+    msg.extend_from_slice(address_bytes);
+
+    // Check if the message length exceeds the maximum allowed size
+    if msg.len() > MAX_HANDSHAKE_RESP_SIZE {
+        return Err(MessageError::InvalidMsgLength);
+    }
+
+    Ok(msg)
+}
 
 // Constants needed for unmarshal_auth_msg
 const SIZE_OF_MAGIC_BYTE: usize = 4;
