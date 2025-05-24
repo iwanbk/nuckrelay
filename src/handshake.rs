@@ -1,8 +1,9 @@
 use std::{error::Error, fmt};
 
 use anyhow::Result;
+use futures_util::SinkExt;
 use futures_util::StreamExt;
-use futures_util::stream::SplitStream;
+use futures_util::stream::{SplitSink, SplitStream};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{error, info};
@@ -52,7 +53,9 @@ impl From<MessageError> for HandshakeError {
 
 /// Reads the handshake data from the incoming WebSocket stream
 pub async fn handshake<S>(
+    outgoing: &mut SplitSink<WebSocketStream<S>, Message>,
     incoming: &mut SplitStream<WebSocketStream<S>>,
+    prepared_auth_response: Vec<u8>,
 ) -> Result<(Vec<u8>, String), HandshakeError>
 where
     S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
@@ -109,6 +112,11 @@ where
 
     // handle auth message
     let (raw_peer_id, peer_id) = handle_auth_message(&data)?;
+
+    // send auth response
+    outgoing
+        .send(Message::Binary(prepared_auth_response.into()))
+        .await?;
 
     Ok((raw_peer_id, peer_id))
 }
