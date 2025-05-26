@@ -36,6 +36,7 @@ pub enum MessageType {
     AuthResponse = 7,
 }
 
+// Constants
 pub const MAX_HANDSHAKE_SIZE: usize = 212;
 pub const MAX_HANDSHAKE_RESP_SIZE: usize = 8192;
 pub const SIZE_OF_VERSION_BYTE: usize = 1;
@@ -43,6 +44,11 @@ pub const SIZE_OF_MSG_TYPE: usize = 1;
 pub const PROTO_HEADER_SIZE: usize = SIZE_OF_VERSION_BYTE + SIZE_OF_MSG_TYPE;
 pub const CURRENT_PROTO_VERSION: i64 = 1;
 pub const OFFSET_TRANSPORT_ID: usize = PROTO_HEADER_SIZE;
+
+// Pre-prepared message for health check
+// This is equivalent to the Go constant:
+// healthCheckMsg = []byte{byte(CurrentProtocolVersion), byte(MsgTypeHealthCheck)}
+pub const HEALTH_CHECK_MSG: [u8; 2] = [CURRENT_PROTO_VERSION as u8, MessageType::HealthCheck as u8];
 
 /// Creates a response message to the auth.
 ///
