@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::{error::Error, fmt};
 
 use anyhow::Result;
@@ -6,12 +7,13 @@ use futures_util::StreamExt;
 use futures_util::stream::{SplitSink, SplitStream};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::Message;
-use tracing::{error, info};
+use tracing::{debug, error};
 
 use crate::message::{CURRENT_PROTO_VERSION, MAX_HANDSHAKE_SIZE, PROTO_HEADER_SIZE};
 use crate::message::{
     MessageError, MessageType, determine_client_message_type, hash_id_to_string, unmarshal_auth_msg,
 };
+use crate::validator::Validator;
 
 #[derive(Debug)]
 pub enum HandshakeError {
@@ -20,6 +22,7 @@ pub enum HandshakeError {
     UnsupportedVersion,
     StreamClosed,
     InvalidMsgType,
+    ValidationError(String),
 }
 
 impl fmt::Display for HandshakeError {
@@ -30,6 +33,7 @@ impl fmt::Display for HandshakeError {
             HandshakeError::StreamClosed => write!(f, "WebSocket stream closed before handshake"),
             HandshakeError::UnsupportedVersion => write!(f, "Unsupported protocol version"),
             HandshakeError::InvalidMsgType => write!(f, "Invalid message type"),
+            HandshakeError::ValidationError(msg) => write!(f, "Validation error: {}", msg),
         }
     }
 }
@@ -55,6 +59,7 @@ impl From<MessageError> for HandshakeError {
 pub async fn handshake<S>(
     outgoing: &mut SplitSink<WebSocketStream<S>, Message>,
     incoming: &mut SplitStream<WebSocketStream<S>>,
+    validator: Arc<Validator>,
     prepared_auth_response: Vec<u8>,
 ) -> Result<(Vec<u8>, String), HandshakeError>
 where
@@ -81,7 +86,7 @@ where
         return Err(HandshakeError::InvalidMsgLength);
     }
 
-    info!("Received handshake data of size: {} bytes", data.len());
+    debug!("Received handshake data of size: {} bytes", data.len());
 
     // make sure the data length is less that PROTO_HEADER_SIZE
     if data.len() < PROTO_HEADER_SIZE {
@@ -111,7 +116,7 @@ where
     }
 
     // handle auth message
-    let (raw_peer_id, peer_id) = handle_auth_message(&data)?;
+    let (raw_peer_id, peer_id) = handle_auth_message(&data, validator)?;
 
     // send auth response
     outgoing
@@ -121,15 +126,19 @@ where
     Ok((raw_peer_id, peer_id))
 }
 
-pub fn handle_auth_message(data: &[u8]) -> Result<(Vec<u8>, String), HandshakeError> {
-    // Handle the authentication message here
-    // For now, just print the data
-    info!("Handling auth message: {:?}", data);
-
+pub fn handle_auth_message(
+    data: &[u8],
+    validator: Arc<Validator>,
+) -> Result<(Vec<u8>, String), HandshakeError> {
     // MessageError will be automatically converted to HandshakeError via the From trait
     let (raw_peer_id, _auth_payload) = unmarshal_auth_msg(data)?;
 
-    // TODO : validate auth_payload
+    // Validate the auth payload
+    if let Err(e) = validator.validate(&_auth_payload) {
+        error!("Authentication validation failed : {}", e);
+        return Err(HandshakeError::ValidationError(e.to_string()));
+    }
+
     let peer_id = hash_id_to_string(&raw_peer_id);
 
     Ok((raw_peer_id, peer_id))

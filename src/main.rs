@@ -3,12 +3,14 @@ mod message;
 mod peer;
 mod server;
 mod store;
+mod validator;
 
 use clap::Parser;
 use tokio::net::TcpListener;
 use tracing::info;
 
 use crate::server::Server;
+use crate::validator::{Validator, sha256_sum};
 
 #[derive(Parser, Debug)]
 #[clap(name = "nuckrelay", about = "Nuck relay server")]
@@ -19,6 +21,9 @@ struct Cli {
 
     #[clap(long, env = "NB_LISTEN_ADDRESS", default_value = "0.0.0.0:443")]
     listen_address: String,
+
+    #[clap(long, env = "NB_AUTH_SECRET")]
+    auth_secret: String,
 }
 
 #[tokio::main]
@@ -38,7 +43,9 @@ async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt::init();
 
     // Create the server
-    let server = Server::new(cli.exposed_address, false)?;
+    let hashed_secret = sha256_sum(cli.auth_secret.as_bytes());
+    let validator = Validator::new(hashed_secret.to_vec());
+    let server = Server::new(cli.exposed_address, false, validator)?;
 
     let try_socket = TcpListener::bind(cli.listen_address).await;
     let listener = try_socket.expect("Failed to bind");
