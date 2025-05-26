@@ -57,6 +57,7 @@ impl Server {
         info!("Handshake successful for peer: {}", peer_id);
 
         let (peer_tx, peer_rx) = tokio::sync::mpsc::channel(100);
+        let peer_tx = Arc::new(peer_tx);
 
         // Create a new peer
         let mut peer = Peer::new(
@@ -69,34 +70,14 @@ impl Server {
         );
 
         // Add the peer to the store
-        self.store.add_peer(peer.to_string(), Arc::new(peer_tx));
+        self.store.add_peer(peer.to_string(), peer_tx.clone());
         info!("Peer {} added to store", peer_id);
 
         peer.work().await;
 
-        // Wait for the peer to disconnect or for an error
-        // TODO: Implement peer.work() to handle messages
-
-        /*
-        go func() {
-            peer.Work()
-            r.store.DeletePeer(peer)
-            peer.log.Debugf("relay connection closed")
-            r.metrics.PeerDisconnected(peer.String())
-        }()
-
-        if err := h.handshakeResponse(); err != nil {
-            log.Errorf("failed to send handshake response, close peer: %s", err)
-            peer.Close()
-        }
-        */
-
-        // For now, just sleep for a bit to keep the connection alive
-        tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
-
         // Clean up by removing peer from store
-        // self.store.delete_peer(&peer);
-        // info!("Peer {} removed from store", peer_id);
+        self.store.delete_peer(peer.to_string().as_str(), &peer_tx);
+        info!("Peer {} removed from store", peer.to_string());
         info!("{} disconnected", &addr);
         Ok(())
     }
