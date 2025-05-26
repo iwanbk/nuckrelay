@@ -11,24 +11,26 @@ use crate::handshake;
 use crate::message::marshal_auth_response;
 use crate::peer::Peer;
 use crate::store::Store;
+use crate::validator::Validator;
 
 /// The main server that handles incoming WebSocket connections
 #[derive(Clone)]
 pub struct Server {
     /// Store that manages all peer connections
     store: Arc<Store>,
-
+    validator: Arc<Validator>,
     prepared_auth_response: Vec<u8>,
 }
 
 impl Server {
     /// Create a new Server instance
-    pub fn new(exposed_address: String, tls_supported: bool) -> Result<Self> {
+    pub fn new(exposed_address: String, tls_supported: bool, validator: Validator) -> Result<Self> {
         let store = Arc::new(Store::new());
         let instance_url = get_instance_url(&exposed_address, tls_supported)?;
         let prepared_auth_response = marshal_auth_response(&instance_url)?;
         Ok(Server {
             store,
+            validator: Arc::new(validator),
             prepared_auth_response,
         })
     }
@@ -51,6 +53,7 @@ impl Server {
         let (raw_peer_id, peer_id) = handshake::handshake(
             &mut outgoing,
             &mut incoming,
+            self.validator.clone(),
             self.prepared_auth_response.clone(),
         )
         .await?;
