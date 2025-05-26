@@ -56,18 +56,23 @@ impl Server {
         .await?;
         info!("Handshake successful for peer: {}", peer_id);
 
+        let (peer_tx, peer_rx) = tokio::sync::mpsc::channel(100);
+
         // Create a new peer
-        let peer = Arc::new(Peer::new(
+        let mut peer = Peer::new(
             raw_peer_id,
             peer_id.clone(),
             incoming,
             outgoing,
+            peer_rx,
             self.store.clone(),
-        ));
+        );
 
         // Add the peer to the store
-        self.store.add_peer(peer.clone());
+        self.store.add_peer(peer.to_string(), Arc::new(peer_tx));
         info!("Peer {} added to store", peer_id);
+
+        peer.work().await;
 
         // Wait for the peer to disconnect or for an error
         // TODO: Implement peer.work() to handle messages
