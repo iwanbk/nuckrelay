@@ -42,6 +42,7 @@ pub const SIZE_OF_VERSION_BYTE: usize = 1;
 pub const SIZE_OF_MSG_TYPE: usize = 1;
 pub const PROTO_HEADER_SIZE: usize = SIZE_OF_VERSION_BYTE + SIZE_OF_MSG_TYPE;
 pub const CURRENT_PROTO_VERSION: i64 = 1;
+pub const OFFSET_TRANSPORT_ID: usize = PROTO_HEADER_SIZE;
 
 /// Creates a response message to the auth.
 ///
@@ -78,6 +79,9 @@ const MAGIC_HEADER: [u8; 4] = [0x21, 0x12, 0xA4, 0x42];
 const HEADER_TOTAL_SIZE_AUTH: usize = PROTO_HEADER_SIZE + SIZE_OF_MAGIC_BYTE + 36; // 36 is ID_SIZE from Go code
 const OFFSET_MAGIC_BYTE: usize = PROTO_HEADER_SIZE;
 const OFFSET_AUTH_PEER_ID: usize = PROTO_HEADER_SIZE + SIZE_OF_MAGIC_BYTE;
+
+const HEADER_SIZE_TRANSPORT: usize = 36; // IDSize, which is 36 from the Go code
+const HEADER_TOTAL_SIZE_TRANSPORT: usize = PROTO_HEADER_SIZE + HEADER_SIZE_TRANSPORT;
 
 pub fn determine_client_message_type(data: &[u8]) -> Result<MessageType, MessageError> {
     if data.len() < PROTO_HEADER_SIZE {
@@ -138,4 +142,31 @@ pub fn hash_id_to_string(id_hash: &[u8]) -> String {
 
     // Combine prefix and encoded data
     format!("{}{}", prefix, encoded)
+}
+
+/// Extracts the peerID from the transport message.
+///
+/// This is a Rust implementation of the Go function:
+/// https://github.com/netbirdio/netbird/blob/670446d42e385397b8be87b13c5fd504c303ce86/relay/messages/message.go#L295-L300
+pub fn unmarshal_transport_id(buf: &[u8]) -> Result<Vec<u8>, MessageError> {
+    if buf.len() < HEADER_TOTAL_SIZE_TRANSPORT {
+        return Err(MessageError::InvalidMsgLength);
+    }
+
+    Ok(buf[OFFSET_TRANSPORT_ID..OFFSET_TRANSPORT_ID + HEADER_SIZE_TRANSPORT].to_vec())
+}
+
+/// Updates the peerID in the transport message.
+///
+/// This is a Rust implementation of the Go function:
+/// https://github.com/netbirdio/netbird/blob/main/relay/messages/message.go#L306-L310
+pub fn update_transport_msg(msg: &mut [u8], peer_id: &[u8]) -> Result<(), MessageError> {
+    if msg.len() < OFFSET_TRANSPORT_ID + peer_id.len() {
+        return Err(MessageError::InvalidMsgLength);
+    }
+
+    // Copy the peer_id into the message at the transport ID offset
+    msg[OFFSET_TRANSPORT_ID..OFFSET_TRANSPORT_ID + peer_id.len()].copy_from_slice(peer_id);
+
+    Ok(())
 }
