@@ -1,5 +1,6 @@
 use std::fmt;
 
+use bytes::Bytes;
 use futures_util::SinkExt; // Add this import for the send method
 use futures_util::stream::{SplitSink, SplitStream, StreamExt};
 use std::sync::Arc;
@@ -61,26 +62,9 @@ impl Peer {
                     match message {
                         Some(Ok(msg)) => {
                             // Process the incoming WebSocket message
-                            match msg {
-                                Message::Binary(data) => {
-                                    tracing::info!("Received binary message from peer {}: {} bytes", self.peer_id, data.len());
-                                    // Handle the binary message (e.g., forward it to other peers)
-                                    if let Err(e) = self.handle_net_messsage(data.to_vec()).await {
-                                        tracing::error!("Error handling network message: {}", e);
-                                        break; // Exit the loop on message handling error
-                                    }
-                                }
-                                Message::Text(text) => {
-                                    tracing::info!("Received text message from peer {}: {}", self.peer_id, text);
-                                    // Handle the text message if needed
-                                }
-                                Message::Close(_) => {
-                                    tracing::info!("Peer {} requested to close the connection", self.peer_id);
-                                    break; // Exit the loop on close message
-                                }
-                                _ => {
-                                    tracing::warn!("Received unsupported message type from peer {}", self.peer_id);
-                                }
+                            if let Err(e) = self.handle_websocket_message(msg).await {
+                                tracing::error!("Error handling WebSocket message: {}", e);
+                                break; // Exit the loop on error
                             }
                         }
                         Some(Err(e)) => {
@@ -113,6 +97,13 @@ impl Peer {
                             break; // Exit the loop when channel is closed
                         }
                     }
+                },
+
+                // Periodic 25-second status update
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
+                    let health_check_bytes = Bytes::from_static(&message::HEALTH_CHECK_MSG);
+                    self.tx_conn.send(Message::Binary(health_check_bytes)).await
+                        .unwrap_or_else(|e| tracing::error!("Failed to send ping: {}", e));
                 }
             }
         }
@@ -120,7 +111,37 @@ impl Peer {
         tracing::info!("Peer {} disconnected", self.peer_id);
     }
 
-    async fn handle_net_messsage(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
+    /// Handles different types of WebSocket messages
+    async fn handle_websocket_message(&mut self, msg: Message) -> anyhow::Result<()> {
+        match msg {
+            Message::Binary(data) => {
+                tracing::info!(
+                    "Received binary message from peer {}: {} bytes",
+                    self.peer_id,
+                    data.len()
+                );
+                // Handle the binary message (e.g., forward it to other peers)
+                self.handle_net_binary_messsage(data.to_vec()).await?;
+            }
+            Message::Text(text) => {
+                tracing::info!("Received text message from peer {}: {}", self.peer_id, text);
+                // Handle the text message if needed
+            }
+            Message::Close(_) => {
+                tracing::info!("Peer {} requested to close the connection", self.peer_id);
+                return Err(anyhow::anyhow!("Peer requested connection close"));
+            }
+            _ => {
+                tracing::warn!(
+                    "Received unsupported message type from peer {}",
+                    self.peer_id
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn handle_net_binary_messsage(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
         // validate version and message type
         tracing::info!("Handling network message of size: {} bytes", data.len());
         let msg_type = message::determine_client_message_type(&data);
