@@ -31,7 +31,13 @@ pub struct Peer {
 
     /// Reference to the store that manages peers
     store: Arc<Store>,
+
+    /// Buffer to accumulate data before flushing
+    pending_bytes: usize,
 }
+
+// Buffer size constants
+const BUFFER_FLUSH_SIZE: usize = 4096; // 8KB - optimal for most network applications
 
 impl Peer {
     /// Creates a new Peer instance
@@ -50,6 +56,7 @@ impl Peer {
             tx_conn,
             rx_chan,
             store,
+            pending_bytes: 0, // Initialize buffer counter
         }
     }
 
@@ -79,18 +86,13 @@ impl Peer {
                     }
                 },
 
-                // Handle messages from other peers via the channel
+                // Handle messages from other peers via the channel with immediate batching
                 message = self.rx_chan.recv() => {
                     match message {
                         Some(data) => {
-                            debug!("Received message via channel, size: {} bytes", data.len());
-                            // Forward messages to connected client
-                            match self.tx_conn.send(Message::Binary(data)).await {
-                                Ok(_) => debug!("Successfully forwarded message to peer"),
-                                Err(e) => {
-                                    error!("Failed to forward message: {}", e);
-                                    break; // Exit the loop on send error
-                                }
+                            if let Err(e) = self.handle_channel_message_with_batching(data).await {
+                                error!("Error handling channel message: {}", e);
+                                break;
                             }
                         }
                         None => {
@@ -103,10 +105,16 @@ impl Peer {
                 // Periodic 25-second status update
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
                     let health_check_bytes = Bytes::from_static(&message::HEALTH_CHECK_MSG);
+
                     self.tx_conn.send(Message::Binary(health_check_bytes)).await
                         .unwrap_or_else(|e| error!("Failed to send ping: {}", e));
                 }
             }
+        }
+
+        // Ensure any remaining data is flushed before closing
+        if self.pending_bytes > 0 {
+            let _ = self.flush_buffer().await;
         }
 
         info!("Peer {} disconnected", self.peer_id);
@@ -199,6 +207,61 @@ impl Peer {
             error!("Failed to send message to peer {}: {}", dst_peer_id, e);
             e
         })?;
+
+        Ok(())
+    }
+
+    /// Handle channel message with smart batching using try_recv()
+    /// This approach is more efficient than timeout-based batching
+    async fn handle_channel_message_with_batching(
+        &mut self,
+        first_data: bytes::Bytes,
+    ) -> anyhow::Result<()> {
+        // Start with the first message
+        self.tx_conn
+            .feed(Message::Binary(first_data.clone()))
+            .await?;
+        self.pending_bytes += first_data.len();
+
+        // Batch additional messages using try_recv() - zero-copy approach
+        loop {
+            match self.rx_chan.try_recv() {
+                Ok(data) => {
+                    // We got more data, add it to the buffer
+                    self.tx_conn.feed(Message::Binary(data.clone())).await?;
+                    self.pending_bytes += data.len();
+
+                    // Check if we should flush (buffer size limit reached)
+                    if self.pending_bytes >= BUFFER_FLUSH_SIZE {
+                        break; // Exit loop to flush
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                    // No more messages immediately available
+                    break;
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    // Channel closed, flush and return error
+                    self.flush_buffer().await?;
+                    return Err(anyhow::anyhow!("Channel disconnected"));
+                }
+            }
+        }
+
+        // Flush all buffered data once after the loop
+        self.flush_buffer().await?;
+
+        Ok(())
+    }
+
+    /// Flushes the buffered WebSocket messages
+    async fn flush_buffer(&mut self) -> anyhow::Result<()> {
+        if let Err(e) = self.tx_conn.flush().await {
+            error!("Failed to flush WebSocket buffer: {}", e);
+            return Err(anyhow::anyhow!("WebSocket flush failed: {}", e));
+        }
+        debug!("Flushed {} bytes from buffer", self.pending_bytes);
+        self.pending_bytes = 0; // Reset buffer counter
 
         Ok(())
     }

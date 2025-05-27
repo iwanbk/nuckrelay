@@ -22,7 +22,7 @@ impl Store {
         let mut peers = self.peers_tx.write().unwrap();
 
         // If a peer with the same ID already exists, close it
-        if let Some(_) = peers.get(peer_id.as_str()) {
+        if peers.get(peer_id.as_str()).is_some() {
             //old_peer.close();
             tracing::info!("Closing existing peer with ID: {}", peer_id);
         }
