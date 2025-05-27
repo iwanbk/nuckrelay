@@ -14,4 +14,5 @@ Features:
 - [ ] TLS
 - [ ] Let's Encrypt
 - [ ] QUIC
+- [ ] Proper healthcheck
 - [ ] Metrics
