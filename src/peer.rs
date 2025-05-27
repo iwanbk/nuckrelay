@@ -27,7 +27,7 @@ pub struct Peer {
     /// The outgoing part of the WebSocket stream
     tx_conn: SplitSink<WebSocketStream<TcpStream>, Message>,
 
-    rx_chan: tokio::sync::mpsc::Receiver<Vec<u8>>,
+    rx_chan: tokio::sync::mpsc::Receiver<bytes::Bytes>,
 
     /// Reference to the store that manages peers
     store: Arc<Store>,
@@ -40,7 +40,7 @@ impl Peer {
         peer_id: String,
         rx_conn: SplitStream<WebSocketStream<TcpStream>>,
         tx_conn: SplitSink<WebSocketStream<TcpStream>, Message>,
-        rx_chan: tokio::sync::mpsc::Receiver<Vec<u8>>,
+        rx_chan: tokio::sync::mpsc::Receiver<bytes::Bytes>,
         store: Arc<Store>,
     ) -> Self {
         Peer {
@@ -85,7 +85,7 @@ impl Peer {
                         Some(data) => {
                             debug!("Received message via channel, size: {} bytes", data.len());
                             // Forward messages to connected client
-                            match self.tx_conn.send(Message::Binary(data.into())).await {
+                            match self.tx_conn.send(Message::Binary(data)).await {
                                 Ok(_) => debug!("Successfully forwarded message to peer"),
                                 Err(e) => {
                                     error!("Failed to forward message: {}", e);
@@ -122,7 +122,7 @@ impl Peer {
                     data.len()
                 );
                 // Handle the binary message (e.g., forward it to other peers)
-                self.handle_net_binary_messsage(data.to_vec()).await?;
+                self.handle_net_binary_messsage(data).await?;
             }
             Message::Text(text) => {
                 error!("Received text message from peer {}: {}", self.peer_id, text);
@@ -142,7 +142,7 @@ impl Peer {
         Ok(())
     }
 
-    async fn handle_net_binary_messsage(&mut self, data: Vec<u8>) -> anyhow::Result<()> {
+    async fn handle_net_binary_messsage(&mut self, data: bytes::Bytes) -> anyhow::Result<()> {
         // validate version and message type
         debug!("Handling network message of size: {} bytes", data.len());
         let msg_type = message::determine_client_message_type(&data);
@@ -173,7 +173,7 @@ impl Peer {
         Ok(())
     }
 
-    async fn handle_transport_message(&mut self, mut data: Vec<u8>) -> anyhow::Result<()> {
+    async fn handle_transport_message(&mut self, data: bytes::Bytes) -> anyhow::Result<()> {
         // Handle transport messages here
         debug!("Handling transport message of size: {} bytes", data.len());
         let raw_dst_peer_id = message::unmarshal_transport_id(&data).map_err(|e| {
@@ -186,9 +186,16 @@ impl Peer {
             anyhow::anyhow!("Destination peer not found")
         })?;
 
-        message::update_transport_msg(&mut data, &self.raw_peer_id)?;
+        // Create a BytesMut with the same data
+        let mut data_mut = bytes::BytesMut::with_capacity(data.len());
+        data_mut.extend_from_slice(&data);
 
-        dst_peer_tx.send(data).await.map_err(|e| {
+        message::update_transport_msg(&mut data_mut, &self.raw_peer_id)?;
+
+        // Convert back to Bytes (this is zero-copy)
+        let updated_data = data_mut.freeze();
+
+        dst_peer_tx.send(updated_data).await.map_err(|e| {
             error!("Failed to send message to peer {}: {}", dst_peer_id, e);
             e
         })?;

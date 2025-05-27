@@ -59,7 +59,7 @@ impl Server {
         .await?;
         info!("Handshake successful for peer: {}", peer_id);
 
-        let (peer_tx, peer_rx) = tokio::sync::mpsc::channel(100);
+        let (peer_tx, peer_rx) = tokio::sync::mpsc::channel::<bytes::Bytes>(100);
         let peer_tx = Arc::new(peer_tx);
 
         // Create a new peer
