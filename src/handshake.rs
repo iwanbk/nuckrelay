@@ -2,11 +2,8 @@ use std::sync::Arc;
 use std::{error::Error, fmt};
 
 use anyhow::Result;
-use futures_util::SinkExt;
-use futures_util::StreamExt;
-use futures_util::stream::{SplitSink, SplitStream};
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
+use fastwebsockets::{FragmentCollector, Frame, OpCode, WebSocket};
+use tokio::net::TcpStream;
 use tracing::{debug, error};
 
 use crate::message::{CURRENT_PROTO_VERSION, MAX_HANDSHAKE_SIZE, PROTO_HEADER_SIZE};
@@ -18,7 +15,7 @@ use crate::validator::Validator;
 #[derive(Debug)]
 pub enum HandshakeError {
     InvalidMsgLength,
-    WebSocketError(tokio_tungstenite::tungstenite::Error),
+    WebSocketError(fastwebsockets::WebSocketError),
     UnsupportedVersion,
     StreamClosed,
     InvalidMsgType,
@@ -40,8 +37,8 @@ impl fmt::Display for HandshakeError {
 
 impl Error for HandshakeError {}
 
-impl From<tokio_tungstenite::tungstenite::Error> for HandshakeError {
-    fn from(error: tokio_tungstenite::tungstenite::Error) -> Self {
+impl From<fastwebsockets::WebSocketError> for HandshakeError {
+    fn from(error: fastwebsockets::WebSocketError) -> Self {
         HandshakeError::WebSocketError(error)
     }
 }
@@ -56,26 +53,25 @@ impl From<MessageError> for HandshakeError {
 }
 
 /// Reads the handshake data from the incoming WebSocket stream
-pub async fn handshake<S>(
-    outgoing: &mut SplitSink<WebSocketStream<S>, Message>,
-    incoming: &mut SplitStream<WebSocketStream<S>>,
+pub async fn handshake(
+    ws_stream: &mut WebSocket<TcpStream>,
     validator: Arc<Validator>,
     prepared_auth_response: Vec<u8>,
-) -> Result<(Vec<u8>, String), HandshakeError>
-where
-    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
-{
+) -> Result<(Vec<u8>, String), HandshakeError> {
     // Get the next message from the stream
-    let message = incoming.next().await.ok_or_else(|| {
-        error!("WebSocket stream closed before handshake");
-        HandshakeError::StreamClosed
-    })??;
+    let frame = ws_stream.read_frame().await.map_err(|e| {
+        error!("WebSocket stream error during handshake: {}", e);
+        HandshakeError::from(e)
+    })?;
 
     // Extract data from the message
-    let data = match message {
-        Message::Binary(data) => data,
+    let data = match frame.opcode {
+        OpCode::Binary => frame.payload.to_vec(),
         other => {
-            error!("Expected binary message for handshake, got: {:?}", other);
+            error!(
+                "Expected binary message for handshake, got opcode: {:?}",
+                other
+            );
             return Err(HandshakeError::InvalidMsgLength);
         }
     };
@@ -119,9 +115,8 @@ where
     let (raw_peer_id, peer_id) = handle_auth_message(&data, validator)?;
 
     // send auth response
-    outgoing
-        .send(Message::Binary(prepared_auth_response.into()))
-        .await?;
+    let response_frame = Frame::new(true, OpCode::Binary, None, prepared_auth_response.into());
+    ws_stream.write_frame(response_frame).await?;
 
     Ok((raw_peer_id, peer_id))
 }
