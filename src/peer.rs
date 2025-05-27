@@ -1,12 +1,8 @@
 use std::fmt;
 
 use bytes::Bytes;
-use futures_util::SinkExt; // Add this import for the send method
-use futures_util::stream::{SplitSink, SplitStream, StreamExt};
+use fastwebsockets::{FragmentCollector, Frame, OpCode, WebSocket};
 use std::sync::Arc;
-use tokio::net::TcpStream;
-use tokio_tungstenite::WebSocketStream;
-use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, error, info, warn};
 
 use crate::message;
@@ -21,11 +17,8 @@ pub struct Peer {
     /// The peer ID as a string (for display and lookup)
     peer_id: String,
 
-    /// The incoming part of the WebSocket stream
-    rx_conn: SplitStream<WebSocketStream<TcpStream>>,
-
-    /// The outgoing part of the WebSocket stream
-    tx_conn: SplitSink<WebSocketStream<TcpStream>, Message>,
+    /// The WebSocket stream
+    ws_stream: WebSocket<tokio::net::TcpStream>,
 
     rx_chan: tokio::sync::mpsc::Receiver<bytes::Bytes>,
 
@@ -44,16 +37,14 @@ impl Peer {
     pub fn new(
         raw_peer_id: Vec<u8>,
         peer_id: String,
-        rx_conn: SplitStream<WebSocketStream<TcpStream>>,
-        tx_conn: SplitSink<WebSocketStream<TcpStream>, Message>,
+        ws_stream: WebSocket<tokio::net::TcpStream>,
         rx_chan: tokio::sync::mpsc::Receiver<bytes::Bytes>,
         store: Arc<Store>,
     ) -> Self {
         Peer {
             raw_peer_id,
             peer_id,
-            rx_conn,
-            tx_conn,
+            ws_stream,
             rx_chan,
             store,
             pending_bytes: 0, // Initialize buffer counter
@@ -66,22 +57,18 @@ impl Peer {
             // Use tokio::select! to concurrently wait on multiple async operations
             tokio::select! {
                 // Handle incoming WebSocket messages
-                message = self.rx_conn.next() => {
-                    match message {
-                        Some(Ok(msg)) => {
-                            // Process the incoming WebSocket message
-                            if let Err(e) = self.handle_websocket_message(msg).await {
-                                error!("Error handling WebSocket message: {}", e);
+                ws_result = self.ws_stream.read_frame() => {
+                    match ws_result {
+                        Ok(frame) => {
+                            // Process the incoming WebSocket frame
+                            if let Err(e) = self.handle_websocket_frame(frame).await {
+                                error!("Error handling WebSocket frame: {}", e);
                                 break; // Exit the loop on error
                             }
                         }
-                        Some(Err(e)) => {
-                            error!("Error receiving WebSocket message: {}", e);
+                        Err(e) => {
+                            error!("Error receiving WebSocket frame: {}", e);
                             break; // Exit the loop on WebSocket error
-                        }
-                        None => {
-                            info!("WebSocket stream ended for peer {}", self.peer_id);
-                            break; // Exit the loop when WebSocket stream ends
                         }
                     }
                 },
@@ -104,56 +91,79 @@ impl Peer {
 
                 // Periodic 25-second status update
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
-                    let health_check_bytes = Bytes::from_static(&message::HEALTH_CHECK_MSG);
+                    // Gunakan referensi langsung ke data statis
+                    let health_check_frame = Frame::new(true, OpCode::Binary, None, fastwebsockets::Payload::Borrowed(&message::HEALTH_CHECK_MSG));
 
-                    self.tx_conn.send(Message::Binary(health_check_bytes)).await
-                        .unwrap_or_else(|e| error!("Failed to send ping: {}", e));
+                    if let Err(e) = self.ws_stream.write_frame(health_check_frame).await {
+                        error!("Failed to send health check: {}", e);
+                    }
                 }
             }
         }
 
-        // Ensure any remaining data is flushed before closing
-        if self.pending_bytes > 0 {
-            let _ = self.flush_buffer().await;
-        }
-
+        // Tidak perlu flush lagi dengan fastwebsockets
         info!("Peer {} disconnected", self.peer_id);
     }
 
-    /// Handles different types of WebSocket messages
-    async fn handle_websocket_message(&mut self, msg: Message) -> anyhow::Result<()> {
-        match msg {
-            Message::Binary(data) => {
+    /// Handles different types of WebSocket frames
+    async fn handle_websocket_frame(&mut self, frame: Frame<'_>) -> anyhow::Result<()> {
+        match frame.opcode {
+            OpCode::Binary => {
+                // Menggunakan referensi ke payload langsung tanpa alokasi tambahan
+                let payload_ref = &frame.payload[..];
                 debug!(
-                    "Received binary message from peer {}: {} bytes",
+                    "Received binary frame from peer {}: {} bytes",
                     self.peer_id,
-                    data.len()
+                    payload_ref.len()
                 );
-                // Handle the binary message (e.g., forward it to other peers)
-                self.handle_net_binary_messsage(data).await?;
+                // Determine message type
+                match message::determine_client_message_type(payload_ref) {
+                    Ok(message::MessageType::Transport) => {
+                        // Cek jenis pesan transport berdasarkan header atau konten
+                        if message::is_net_message(payload_ref) {
+                            // Jika ini adalah pesan net, gunakan handler khusus
+                            self.handle_net_binary_messsage(payload_ref).await?
+                        } else {
+                            // Jika ini adalah pesan transport biasa
+                            self.handle_transport_message(payload_ref).await?
+                        }
+                    }
+                    Ok(message::MessageType::HealthCheck) => {
+                        info!("Received health check from peer {}", self.peer_id);
+                        // Respond to health check if needed
+                    }
+                    Ok(_) => {
+                        warn!(
+                            "Received unsupported message type from peer {}",
+                            self.peer_id
+                        );
+                    }
+                    Err(e) => {
+                        error!("Error determining message type: {}", e);
+                    }
+                }
             }
-            Message::Text(text) => {
-                error!("Received text message from peer {}: {}", self.peer_id, text);
-                // Handle the text message if needed
+            OpCode::Text => {
+                error!(
+                    "Received text frame from peer {}, not supported",
+                    self.peer_id
+                );
             }
-            Message::Close(_) => {
+            OpCode::Close => {
                 info!("Peer {} requested to close the connection", self.peer_id);
                 return Err(anyhow::anyhow!("Peer requested connection close"));
             }
             _ => {
-                warn!(
-                    "Received unsupported message type from peer {}",
-                    self.peer_id
-                );
+                warn!("Received unsupported frame type from peer {}", self.peer_id);
             }
         }
         Ok(())
     }
 
-    async fn handle_net_binary_messsage(&mut self, data: bytes::Bytes) -> anyhow::Result<()> {
+    async fn handle_net_binary_messsage(&mut self, data: &[u8]) -> anyhow::Result<()> {
         // validate version and message type
         debug!("Handling network message of size: {} bytes", data.len());
-        let msg_type = message::determine_client_message_type(&data);
+        let msg_type = message::determine_client_message_type(data);
         match msg_type {
             Ok(message::MessageType::Transport) => {
                 // Handle transport message
@@ -162,7 +172,16 @@ impl Peer {
             }
             Ok(message::MessageType::Close) => {
                 info!("Received close message from peer {}", self.peer_id);
-                self.close();
+                // Kirim frame close
+                let close_frame = Frame::new(
+                    true,
+                    OpCode::Close,
+                    None,
+                    fastwebsockets::Payload::Owned(Vec::new()),
+                );
+                if let Err(e) = self.ws_stream.write_frame(close_frame).await {
+                    error!("Failed to send close frame: {}", e);
+                }
             }
             Ok(message::MessageType::HealthCheck) => {
                 info!("Received health check from peer {}", self.peer_id);
@@ -181,10 +200,10 @@ impl Peer {
         Ok(())
     }
 
-    async fn handle_transport_message(&mut self, data: bytes::Bytes) -> anyhow::Result<()> {
+    async fn handle_transport_message(&mut self, data: &[u8]) -> anyhow::Result<()> {
         // Handle transport messages here
         debug!("Handling transport message of size: {} bytes", data.len());
-        let raw_dst_peer_id = message::unmarshal_transport_id(&data).map_err(|e| {
+        let raw_dst_peer_id = message::unmarshal_transport_id(data).map_err(|e| {
             error!("Failed to unmarshal transport ID: {}", e);
             e
         })?;
@@ -217,18 +236,30 @@ impl Peer {
         &mut self,
         first_data: bytes::Bytes,
     ) -> anyhow::Result<()> {
-        // Start with the first message
-        self.tx_conn
-            .feed(Message::Binary(first_data.clone()))
-            .await?;
+        // Start with the first message - konversi ke Vec untuk Payload::Owned
+        let data_vec = first_data.to_vec();
+        let first_frame = Frame::new(
+            true,
+            OpCode::Binary,
+            None,
+            fastwebsockets::Payload::Owned(data_vec),
+        );
+        self.ws_stream.write_frame(first_frame).await?;
         self.pending_bytes += first_data.len();
 
         // Batch additional messages using try_recv() - zero-copy approach
         loop {
             match self.rx_chan.try_recv() {
                 Ok(data) => {
-                    // We got more data, add it to the buffer
-                    self.tx_conn.feed(Message::Binary(data.clone())).await?;
+                    // We got more data, create a new frame dan konversi ke Vec untuk Payload::Owned
+                    let data_vec = data.to_vec();
+                    let frame = Frame::new(
+                        true,
+                        OpCode::Binary,
+                        None,
+                        fastwebsockets::Payload::Owned(data_vec),
+                    );
+                    self.ws_stream.write_frame(frame).await?;
                     self.pending_bytes += data.len();
 
                     // Check if we should flush (buffer size limit reached)
@@ -241,34 +272,33 @@ impl Peer {
                     break;
                 }
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
-                    // Channel closed, flush and return error
-                    self.flush_buffer().await?;
+                    // Channel closed, return error
                     return Err(anyhow::anyhow!("Channel disconnected"));
                 }
             }
         }
 
-        // Flush all buffered data once after the loop
-        self.flush_buffer().await?;
+        // Reset buffer counter after sending all messages
+        debug!("Sent {} bytes in batch", self.pending_bytes);
+        self.pending_bytes = 0;
 
         Ok(())
     }
 
-    /// Flushes the buffered WebSocket messages
-    async fn flush_buffer(&mut self) -> anyhow::Result<()> {
-        if let Err(e) = self.tx_conn.flush().await {
-            error!("Failed to flush WebSocket buffer: {}", e);
-            return Err(anyhow::anyhow!("WebSocket flush failed: {}", e));
-        }
-        debug!("Flushed {} bytes from buffer", self.pending_bytes);
-        self.pending_bytes = 0; // Reset buffer counter
+    // Dengan fastwebsockets, kita tidak perlu fungsi flush_buffer lagi karena
+    // write_frame langsung mengirim data tanpa buffering
 
+    pub async fn close(&mut self) -> anyhow::Result<()> {
+        // Kirim frame close untuk menutup koneksi WebSocket
+        let close_frame = Frame::new(
+            true,
+            OpCode::Close,
+            None,
+            fastwebsockets::Payload::Owned(Vec::new()),
+        );
+        self.ws_stream.write_frame(close_frame).await?;
+        info!("Closed WebSocket connection for peer {}", self.peer_id);
         Ok(())
-    }
-
-    pub fn close(&self) {
-        // Implementation would go here
-        // In the future, this would close the WebSocket connection
     }
 }
 

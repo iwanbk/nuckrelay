@@ -2,6 +2,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use anyhow::{Result, anyhow};
+use fastwebsockets::{Role, WebSocket};
 use futures_util::StreamExt;
 use tokio::net::TcpStream;
 use tracing::info;
@@ -43,16 +44,19 @@ impl Server {
     ) -> anyhow::Result<()> {
         info!("Incoming TCP connection from: {}", addr);
 
-        let ws_stream = tokio_tungstenite::accept_async(raw_stream)
-            .await
-            .expect("Error during the websocket handshake occurred");
+        // Upgrade TCP connection to WebSocket langsung
+        // Karena fastwebsockets tidak menyediakan fungsi untuk upgrade TcpStream langsung,
+        // kita gunakan WebSocket::after_handshake dengan asumsi handshake sudah dilakukan
         info!("WebSocket connection established: {}", addr);
 
-        let (mut outgoing, mut incoming) = ws_stream.split();
+        // Buat WebSocket dari raw TCP stream
+        let mut ws_stream = WebSocket::after_handshake(raw_stream, Role::Server);
+        // Aktifkan auto-pong dan auto-close untuk menangani ping dan close frames secara otomatis
+        ws_stream.set_auto_pong(true);
+        ws_stream.set_auto_close(true);
 
         let (raw_peer_id, peer_id) = handshake::handshake(
-            &mut outgoing,
-            &mut incoming,
+            &mut ws_stream,
             self.validator.clone(),
             self.prepared_auth_response.clone(),
         )
@@ -66,8 +70,7 @@ impl Server {
         let mut peer = Peer::new(
             raw_peer_id,
             peer_id.clone(),
-            incoming,
-            outgoing,
+            ws_stream,
             peer_rx,
             self.store.clone(),
         );

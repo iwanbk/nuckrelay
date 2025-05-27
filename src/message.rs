@@ -176,3 +176,29 @@ pub fn update_transport_msg(msg: &mut [u8], peer_id: &[u8]) -> Result<(), Messag
 
     Ok(())
 }
+
+/// Determines if a transport message is a network message.
+///
+/// This is a helper function to distinguish between different types of transport messages.
+/// Network messages are a specific subtype of transport messages.
+pub fn is_net_message(buf: &[u8]) -> bool {
+    // Check if the message is long enough to be a network message
+    if buf.len() < HEADER_TOTAL_SIZE_TRANSPORT + 2 {
+        return false;
+    }
+
+    // Check for specific network message pattern in the header
+    // This is a simplified implementation - adjust based on your protocol
+    // For example, network messages might have a specific flag or pattern
+    let msg_type = determine_client_message_type(buf);
+    if let Ok(MessageType::Transport) = msg_type {
+        // Additional check for network message subtype
+        // This could be based on a specific byte pattern, flag, or other criteria
+        // For demonstration, we'll check if a specific byte is set
+        if buf.len() > HEADER_TOTAL_SIZE_TRANSPORT + 4 {
+            return buf[HEADER_TOTAL_SIZE_TRANSPORT] & 0x01 == 0x01;
+        }
+    }
+
+    false
+}
