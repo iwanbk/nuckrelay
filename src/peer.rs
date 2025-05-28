@@ -31,9 +31,6 @@ pub struct Peer {
 
     /// Reference to the store that manages peers
     store: Arc<Store>,
-
-    /// Buffer to accumulate data before flushing
-    pending_bytes: usize,
 }
 
 // Buffer size constants
@@ -56,7 +53,6 @@ impl Peer {
             tx_conn,
             rx_chan,
             store,
-            pending_bytes: 0, // Initialize buffer counter
         }
     }
 
@@ -220,7 +216,7 @@ impl Peer {
         self.tx_conn
             .feed(Message::Binary(first_data.clone()))
             .await?;
-        self.pending_bytes += first_data.len();
+        let mut pending_bytes = first_data.len();
 
         // Batch additional messages using try_recv() - zero-copy approach
         loop {
@@ -228,10 +224,10 @@ impl Peer {
                 Ok(data) => {
                     // We got more data, add it to the buffer
                     self.tx_conn.feed(Message::Binary(data.clone())).await?;
-                    self.pending_bytes += data.len();
+                    pending_bytes += data.len();
 
                     // Check if we should flush (buffer size limit reached)
-                    if self.pending_bytes >= BUFFER_FLUSH_SIZE {
+                    if pending_bytes >= BUFFER_FLUSH_SIZE {
                         break; // Exit loop to flush
                     }
                 }
@@ -249,6 +245,7 @@ impl Peer {
 
         // Flush all buffered data once after the loop
         self.flush_buffer().await?;
+        debug!("Flushed {} bytes from buffer", pending_bytes);
 
         Ok(())
     }
@@ -259,8 +256,6 @@ impl Peer {
             error!("Failed to flush WebSocket buffer: {}", e);
             return Err(anyhow::anyhow!("WebSocket flush failed: {}", e));
         }
-        debug!("Flushed {} bytes from buffer", self.pending_bytes);
-        self.pending_bytes = 0; // Reset buffer counter
 
         Ok(())
     }
