@@ -76,7 +76,7 @@ impl Peer {
                             }
                         }
                         Some(Err(e)) => {
-                            error!("Error receiving WebSocket message: {}", e);
+                            error!("Error receiving WebSocket message from peer {} : {}",self.peer_id, e);
                             break; // Exit the loop on WebSocket error
                         }
                         None => {
@@ -104,8 +104,8 @@ impl Peer {
 
                 // Periodic 25-second status update
                 _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
+                    info!("Sending periodic health check to peer {}", self.peer_id);
                     let health_check_bytes = Bytes::from_static(&message::HEALTH_CHECK_MSG);
-
                     self.tx_conn.send(Message::Binary(health_check_bytes)).await
                         .unwrap_or_else(|e| error!("Failed to send ping: {}", e));
                 }
@@ -129,12 +129,10 @@ impl Peer {
                     self.peer_id,
                     data.len()
                 );
-                // Handle the binary message (e.g., forward it to other peers)
                 self.handle_net_binary_messsage(data).await?;
             }
             Message::Text(text) => {
                 error!("Received text message from peer {}: {}", self.peer_id, text);
-                // Handle the text message if needed
             }
             Message::Close(_) => {
                 info!("Peer {} requested to close the connection", self.peer_id);
@@ -166,7 +164,7 @@ impl Peer {
             }
             Ok(message::MessageType::HealthCheck) => {
                 info!("Received health check from peer {}", self.peer_id);
-                // Respond to health check if needed
+                // TODO: handle the health check message
             }
             Ok(_) => {
                 warn!(
