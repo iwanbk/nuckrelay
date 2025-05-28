@@ -102,9 +102,9 @@ impl Peer {
                     }
                 },
 
-                // Periodic 25-second status update
-                _ = tokio::time::sleep(tokio::time::Duration::from_secs(25)) => {
-                    info!("Sending periodic health check to peer {}", self.peer_id);
+                // Periodic 15-second status update
+                _ = tokio::time::sleep(tokio::time::Duration::from_secs(15)) => {
+                    debug!("Sending periodic health check to peer {}", self.peer_id);
                     let health_check_bytes = Bytes::from_static(&message::HEALTH_CHECK_MSG);
                     self.tx_conn.send(Message::Binary(health_check_bytes)).await
                         .unwrap_or_else(|e| error!("Failed to send ping: {}", e));
@@ -113,9 +113,7 @@ impl Peer {
         }
 
         // Ensure any remaining data is flushed before closing
-        if self.pending_bytes > 0 {
-            let _ = self.flush_buffer().await;
-        }
+        let _ = self.flush_buffer().await;
 
         info!("Peer {} disconnected", self.peer_id);
     }
