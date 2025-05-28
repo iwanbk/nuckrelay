@@ -187,10 +187,13 @@ impl Peer {
             e
         })?;
         let dst_peer_id = message::hash_id_to_string(&raw_dst_peer_id);
-        let dst_peer_tx = self.store.get_peer(&dst_peer_id).ok_or_else(|| {
-            error!("Destination peer {} not found in store", dst_peer_id);
-            anyhow::anyhow!("Destination peer not found")
-        })?;
+        let dst_peer_tx = match self.store.get_peer(&dst_peer_id) {
+            Some(tx) => tx,
+            None => {
+                error!("Destination peer {} not found in store", dst_peer_id);
+                return Ok(());
+            }
+        };
 
         // Create a BytesMut with the same data
         let mut data_mut = bytes::BytesMut::with_capacity(data.len());
