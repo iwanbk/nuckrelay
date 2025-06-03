@@ -1,6 +1,5 @@
 # nuckrelay
 
-[![Rust CI](https://github.com/iwanbk/nuckrelay/actions/workflows/rust.yml/badge.svg)](https://github.com/iwanbk/nuckrelay/actions/workflows/rust.yml)
 [![Multi-Platform Build](https://github.com/iwanbk/nuckrelay/actions/workflows/multi-platform.yml/badge.svg)](https://github.com/iwanbk/nuckrelay/actions/workflows/multi-platform.yml)
 
 nuckrelay is a [Netbird](https://github.com/netbirdio/netbird) relay server written in Rust.
