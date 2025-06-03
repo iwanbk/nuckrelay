@@ -6,7 +6,7 @@ nuckrelay is a [Netbird](https://github.com/netbirdio/netbird) relay server writ
 
 ## Status
 
-It works for my personal use, but is not ready for production use.
+It works for my personal use
 
 Features:
 - [x] WebSocket
