@@ -50,10 +50,4 @@ impl Store {
         let peers = self.peers_tx.read().unwrap();
         peers.get(id).cloned()
     }
-
-    /// Returns all the peers in the store
-    pub fn get_all_peers(&self) -> Vec<Arc<Sender<bytes::Bytes>>> {
-        let peers = self.peers_tx.read().unwrap();
-        peers.values().cloned().collect()
-    }
 }
