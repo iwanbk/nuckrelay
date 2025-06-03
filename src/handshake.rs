@@ -18,7 +18,7 @@ use crate::validator::Validator;
 #[derive(Debug)]
 pub enum HandshakeError {
     InvalidMsgLength,
-    WebSocketError(tokio_tungstenite::tungstenite::Error),
+    WebSocketError(String),
     UnsupportedVersion,
     StreamClosed,
     InvalidMsgType,
@@ -29,7 +29,7 @@ impl fmt::Display for HandshakeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             HandshakeError::InvalidMsgLength => write!(f, "Invalid handshake message length"),
-            HandshakeError::WebSocketError(e) => write!(f, "WebSocket error: {}", e),
+            HandshakeError::WebSocketError(msg) => write!(f, "WebSocket error: {}", msg),
             HandshakeError::StreamClosed => write!(f, "WebSocket stream closed before handshake"),
             HandshakeError::UnsupportedVersion => write!(f, "Unsupported protocol version"),
             HandshakeError::InvalidMsgType => write!(f, "Invalid message type"),
@@ -42,7 +42,7 @@ impl Error for HandshakeError {}
 
 impl From<tokio_tungstenite::tungstenite::Error> for HandshakeError {
     fn from(error: tokio_tungstenite::tungstenite::Error) -> Self {
-        HandshakeError::WebSocketError(error)
+        HandshakeError::WebSocketError(error.to_string())
     }
 }
 
