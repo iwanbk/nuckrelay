@@ -25,14 +25,6 @@ pub enum AuthAlgo {
 }
 
 impl AuthAlgo {
-    /// Creates a new HMAC instance based on the algorithm
-    pub fn new(&self) -> Option<Hmac<Sha256>> {
-        match self {
-            AuthAlgo::HmacSha256 => Some(Hmac::new(Sha256::new(), &[])),
-            _ => None,
-        }
-    }
-
     /// Returns the size of the algorithm's output in bytes
     pub fn size(&self) -> usize {
         match self {
