@@ -27,8 +27,8 @@ jobs:
     - name: Check formatting
       run: cargo fmt --all -- --check
     
-    #- name: Clippy
-    #  run: cargo clippy -- -D warnings
+    - name: Clippy
+      run: cargo clippy -- -D warnings
 
   build:
     name: Build and Test
